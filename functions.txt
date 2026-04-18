@@ -1,0 +1,150 @@
+    
+    THIS FUNCTION IS USED WHEN BOTH TOKENS ARE NOT ERC20. THIS, MEANS NON STANDARD TOKENS.
+    IN THESE CASES, WE NEED TO MEASURE BALANCES BEFORE AND AFTER A TRANSACION BECAUSE THESE
+    TOKENS HAVE FEES.
+
+    function addLiquidity2(uint256 _t0Deposit, uint256 _t1Deposit) external {
+        if (_t0Deposit == 0 || _t1Deposit == 0) {
+            revert Pool__NewReservesMustBeGreaterThanZero(_t0Deposit, _t1Deposit);
+        }
+
+        uint256 token0PrevBalance = ERC20(s_token0).balanceOf(address(this));
+        uint256 token1PrevBalance = ERC20(s_token1).balanceOf(address(this));
+
+        bool success = IERC20(s_token0).transferFrom(msg.sender, address(this), _t0Deposit);
+        if (!success) {
+            revert Pool__TransferFailed(s_token0);
+        }
+
+        success = IERC20(s_token1).transferFrom(msg.sender, address(this), _t1Deposit);
+        if (!success) {
+            revert Pool__TransferFailed(s_token1);
+        }
+
+        uint256 token0CurrentBalance = ERC20(s_token0).balanceOf(address(this));
+        uint256 token1CurrentBalance = ERC20(s_token1).balanceOf(address(this));
+
+        _t0Deposit = token0CurrentBalance - token0PrevBalance;
+        _t1Deposit = token1CurrentBalance - token1PrevBalance;
+
+        (uint256 t0AmountUsed, uint256 t1AmountUsed) = _mintLP(_t0Deposit, _t1Deposit);
+
+        s_reserveToken0 += t0AmountUsed;
+        s_reserveToken1 += t1AmountUsed;
+
+        success = ERC20(s_token0).transfer(msg.sender, _t0Deposit - t0AmountUsed);
+        if (!success) {
+            revert Pool__TransferFailed(s_token0);
+        }
+
+        success = ERC20(s_token1).transfer(msg.sender, _t1Deposit - t1AmountUsed);
+        if (!success) {
+            revert Pool__TransferFailed(s_token1);
+        }
+    }
+
+
+        function addLiquidity(uint256 _t0Deposit, uint256 _t1Deposit, uint256 _userIndex) external {
+        // if (usersWithLiquidity.length == 0) {
+        //     return;
+        // }
+        console.log("ADD LIQUIDITY DEL HANDLER LLAMADO: ", address(this));
+        //console.log("POOL ADDRESS IN HANDLER:", address(pool));
+        //timesAddLiquidityCalled++;
+        address user = users[_userIndex % users.length];
+        //address user = msg.sender;
+        //console.log("ADDRESS DESDE LQIUQIDUTY: ", address(pool));
+        // address user = usersWithLiquidity[_userIndex % usersWithLiquidity.length];
+        //address user = makeAddr("user99");
+        uint256 depositT0Adjusted = bound(_t0Deposit, 1e6, MAX_DEPOSIT_SIZE);
+        //uint256 depositT1Adjusted = bound(_t1Deposit, 1e6, MAX_DEPOSIT_SIZE);
+        //uint256 depositT1Adjusted = bound(depositT0Adjusted, 1e18, 1e30);
+        uint256 depositT1Adjusted = depositT0Adjusted;
+        // (uint256 r0, uint256 r1) = pool.getReservePairs();
+        // if (r0 == 0) {
+        //     r0 = depositT0Adjusted;
+        //     r1 = r0;
+        // }
+        // uint256 depositT1Adjusted = depositT0Adjusted * r1 / r0;
+
+        //(uint256 prevReserve0, uint256 prevReserve1) = pool.getReservePairs();
+        //uint256 KBefore = prevReserve0 * prevReserve1;
+
+        //console.log("Selected user:", user);
+        vm.startPrank(user);
+        // ERC20Mock(token0).mint(user, type(uint96).max);
+        //ERC20Mock(token1).mint(user, type(uint96).max);
+
+        ERC20Mock(token0).mint(user, depositT0Adjusted);
+        ERC20Mock(token1).mint(user, depositT1Adjusted);
+
+        // ERC20Mock(token0).mint(msg.sender, type(uint96).max);
+        //ERC20Mock(token1).mint(msg.sender, type(uint96).max);
+
+        ERC20Mock(token0).approve(address(pool), depositT0Adjusted);
+        ERC20Mock(token1).approve(address(pool), depositT1Adjusted);
+
+        pool.addLiquidity(depositT0Adjusted, depositT1Adjusted);
+        vm.stopPrank();
+
+        // console.log("msg.sender inside handler:", msg.sender);
+
+        // usersWithLiquidity.push(user);
+        //(uint256 currentReserve0, uint256 currentReserve1) = pool.getReservePairs();
+        //uint256 KAfter = currentReserve0 * currentReserve1;
+
+        // uint256 prevRatio = prevReserve0 / prevReserve1;
+        // uint256 currentRatio = currentReserve0 / currentReserve1;
+
+        // uint256 diffRatio = prevRatio > currentRatio ? prevRatio - currentRatio : currentRatio - prevRatio;
+        // uint256 maxRatio = prevRatio > currentRatio ? prevRatio : currentRatio;
+
+        // if (maxRatio > 0) {
+        //     assertLe(diffRatio * 1e18 / maxRatio, 1e12);
+        // }
+
+        // uint256 lhs = prevReserve0 * currentReserve1;
+        // uint256 rhs = prevReserve1 * currentReserve0;
+
+        //uint256 diff = lhs > rhs ? lhs - rhs : rhs - lhs;
+        //uint256 maxVal = lhs > rhs ? lhs : rhs;
+
+        // assertLe(diff * 1e18 / maxVal, 1e15, "POOL RATIO BREAKS");
+
+        //assertEq(prevReserve0 / prevReserve1, currentReserve0 / currentReserve1);
+        //assertEq(prevReserve0 * currentReserve1, prevReserve1 * currentReserve0);
+        // assertGe(KAfter, KBefore, "K BREAKS ADDING LIQUIDITY!!");
+    }
+
+
+
+        function removeLiquidity(uint256 _userIndex, uint256 _liquidityToRetrieve) public {
+        uint256 totalLiquidity = pool.getTotalLP();
+        if (totalLiquidity == 0) return;
+
+        address user = users[_userIndex % users.length];
+        uint256 userLP = pool.getUserLP(user);
+        if (userLP == 0) return;
+
+        uint256 liquiditySanitized = bound(_liquidityToRetrieve, 1, userLP);
+
+        (uint256 reserve0, uint256 reserve1) = pool.getReservePairs();
+
+        uint256 expectedT0toRetrieve = (liquiditySanitized * reserve0) / totalLiquidity;
+        uint256 expectedT1toRetrieve = (liquiditySanitized * reserve1) / totalLiquidity;
+
+        uint256 userToken0PrevBalance = ERC20Mock(token0).balanceOf(user);
+        uint256 userToken1PrevBalance = ERC20Mock(token1).balanceOf(user);
+
+        vm.startPrank(user);
+        pool.removeLiquidity(liquiditySanitized);
+        vm.stopPrank();
+
+        uint256 userToken0CurrentBalance = ERC20Mock(token0).balanceOf(user);
+        uint256 userToken1CurrentBalance = ERC20Mock(token1).balanceOf(user);
+
+        assertEq(userToken0CurrentBalance - userToken0PrevBalance, expectedT0toRetrieve, "T0 TO RETRIEVE FAIL!!");
+        assertEq(userToken1CurrentBalance - userToken1PrevBalance, expectedT1toRetrieve, "T1 TO RETRIEVE FAIL!!");
+        assertEq(pool.getUserLP(user), userLP - liquiditySanitized);
+        assertEq(pool.getTotalLP(), totalLiquidity - liquiditySanitized);
+    }
