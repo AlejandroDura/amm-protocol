@@ -58,8 +58,8 @@ contract Pool {
     address[] public usersParticipated;
 
     uint256 public constant PRICE_PRECISION_SCALE = 1e10;
-    uint256 public constant FEE = 3;
-    uint256 private constant PERCENTAGE_PRECISION = 100;
+    uint256 public constant FEE_BPS = 300;
+    uint256 private constant BPS_PRECISION = 10_000;
 
     constructor(address t0, address t1) {
         s_token0 = t0;
@@ -223,12 +223,14 @@ contract Pool {
 
         // rec = _reserveTokenOut - reserveTokenOut_new;
 
-        uint256 amountInWithFee = _amountTokenIn * (PERCENTAGE_PRECISION - FEE) / PERCENTAGE_PRECISION;
-        rec = (_reserveTokenOut * amountInWithFee) / (_reserveTokenIn + amountInWithFee);
+        uint256 amountInAfterFee = _amountTokenIn * (BPS_PRECISION - FEE_BPS) / BPS_PRECISION;
+        rec = (_reserveTokenOut * amountInAfterFee) / (_reserveTokenIn + amountInAfterFee);
 
         if (rec == 0) {
             revert Pool__SwapAmountTooSmall();
         }
+
+        //Maybe add a check if rec >= _reserveTokenOut and revert
 
         reserveTokenIn_new = _reserveTokenIn + _amountTokenIn;
         reserveTokenOut_new = _reserveTokenOut - rec;
@@ -251,6 +253,10 @@ contract Pool {
     ////////////
     //Getters//
     //////////
+    function getK() public view returns(uint256) {
+        return s_reserveToken0 * s_reserveToken1;
+    }
+
     function getPairsDecimals() public view returns (uint8, uint8) {
         uint8 decimals0 = ERC20(s_token0).decimals();
         uint8 decimals1 = ERC20(s_token1).decimals();
