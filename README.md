@@ -13,6 +13,9 @@ At the moment we have the pool code, which defines a pool and all its functional
 
 We need to create now a contract that creates and stores several pools.
 
+Note: The project is not finished. We are improving it and adding new features.
+
+
 ## 🗂️ Project structure
 
 The main pool code can be found in:
