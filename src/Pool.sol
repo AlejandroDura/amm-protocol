@@ -48,13 +48,20 @@ contract Pool {
     /////////
     event LiquidityAdded(address indexed user, uint256 indexed amount0, uint256 indexed amount1);
 
+    //Token pair addresses
     address s_token0;
     address s_token1;
+
+    //Reserves of token pairs.
     uint256 s_reserveToken0;
     uint256 s_reserveToken1;
 
-    uint256 s_LP_totalSupply;
+    //This variable stores the pool proportion for each user in the system.
     mapping(address => uint256) s_userLPSupply;
+
+    //This token measures the total amount of LP tokens. It represents the total proportion of the pool among all users.
+    uint256 s_LP_totalSupply;
+
     address[] public usersParticipated;
 
     uint256 public constant PRICE_PRECISION_SCALE = 1e10;
@@ -74,6 +81,11 @@ contract Pool {
     //External//
     ///////////
 
+    /**
+     * @dev This function adds liquidity to the pool.
+     * @param _t0Deposit deposit amount for token0.
+     * @param _t1Deposit deposit amount for token1.
+     */
     function addLiquidity(uint256 _t0Deposit, uint256 _t1Deposit) external {
         if (_t0Deposit == 0 || _t1Deposit == 0) {
             revert Pool__NewDepositsMustBeGreaterThanZero(_t0Deposit, _t1Deposit);
@@ -100,7 +112,12 @@ contract Pool {
         emit LiquidityAdded(msg.sender, t0AmountUsed, t1AmountUsed);
     }
 
-    //We need to change or modify this by adding LP token mechanism to determine the % the user has in the pool
+    /**
+     * @dev Removes or retrieves liquidity from the pool. The protocol returns to the user its pool proportion,
+     * which is measured by the LP token. This pool proportion includes: the user's original liquidity + acumulated
+     * fees.
+     * @param _liquidityToRetrieve Amount of LP user token. This LP token represents the user`s pool percentaje.
+     */
     function removeLiquidity(uint256 _liquidityToRetrieve) external {
         if (_liquidityToRetrieve == 0) {
             revert Pool__LiquidityToRetrieveMustBeGreaterThanZero();
@@ -134,6 +151,13 @@ contract Pool {
         }
     }
 
+    /**
+     * @dev Swaps the specified token in amount by a token out amount. This function allows a user to exchange
+     * both tokens in the pool. The specified tokenIn is the token the user wants to exchange or swap by the other
+     * token.
+     * @param _tokenIn token to swap.
+     * @param _amountTokenIn The amount of tokenIn you want to swap.
+     */
     function swap(address _tokenIn, uint256 _amountTokenIn) external {
         address token0 = s_token0;
         address token1 = s_token1;
@@ -154,13 +178,13 @@ contract Pool {
         address tokenOut;
         uint256 userRecv;
 
-        if (_tokenIn == s_token0) {
-            tokenIn = s_token0;
-            tokenOut = s_token1;
+        if (_tokenIn == token0) {
+            tokenIn = token0;
+            tokenOut = token1;
             (s_reserveToken0, s_reserveToken1, userRecv) = _swap(s_reserveToken0, s_reserveToken1, _amountTokenIn);
         } else {
-            tokenIn = s_token1;
-            tokenOut = s_token0;
+            tokenIn = token1;
+            tokenOut = token0;
             (s_reserveToken1, s_reserveToken0, userRecv) = _swap(s_reserveToken1, s_reserveToken0, _amountTokenIn);
         }
 
@@ -189,19 +213,31 @@ contract Pool {
         return (scale0, scale1);
     }
 
-    function _mintLP(uint256 _t0Deposit, uint256 _t1Deposit) private returns (uint256 t0Used, uint256 t1Used) {
+    /**
+     * @dev This is the mint LP token function used by the addLiquidity() function. It calculates the new
+     * users' pool proportion based on the deposited amount and the current reserves amounts. The LP token is used to measure
+     * this pool proportion. The function picks the minimum proportion supplied between both token deposit amounts.
+     * And then, applies this minimum proportion to both deposits. So the final deposit proportion will be the same
+     * on both tokens .This is because we need to balance or maintain the pool proportion after the deposit (the
+     * pool proportion must be the same before and after the liquidity addition) in order to maintain the pool price.
+     * @param _t0Deposit Token 0 deposit amount.
+     * @param _t1Deposit Token 1 deposit amount.
+     * @return r_t0Used Token 0 deposit amount adjusted and used. It may be adjusted because of the minimum proportion picked.
+     * @return r_t1Used Token 1 deposit amount adjusted and used. It may be adjusted because of the minimum proportion picked.
+     */
+    function _mintLP(uint256 _t0Deposit, uint256 _t1Deposit) private returns (uint256 r_t0Used, uint256 r_t1Used) {
         uint256 lpToMint;
 
         if (s_LP_totalSupply == 0) {
             lpToMint = Math.sqrt(_t0Deposit * _t1Deposit);
-            t0Used = _t0Deposit;
-            t1Used = _t1Deposit;
+            r_t0Used = _t0Deposit;
+            r_t1Used = _t1Deposit;
         } else {
             uint256 lp0 = (_t0Deposit * s_LP_totalSupply) / s_reserveToken0;
             uint256 lp1 = (_t1Deposit * s_LP_totalSupply) / s_reserveToken1;
             lpToMint = Math.min(lp0, lp1);
-            t0Used = (lpToMint * s_reserveToken0) / s_LP_totalSupply;
-            t1Used = (lpToMint * s_reserveToken1) / s_LP_totalSupply;
+            r_t0Used = (lpToMint * s_reserveToken0) / s_LP_totalSupply;
+            r_t1Used = (lpToMint * s_reserveToken1) / s_LP_totalSupply;
         }
 
         s_LP_totalSupply += lpToMint;
@@ -209,7 +245,19 @@ contract Pool {
         usersParticipated.push(msg.sender);
     }
 
-    //Introduce t0 and receive t1.
+    /**
+     * @dev This is the main function that calculates a swap between both tokens. It uses the classical x * y = k
+     * formula to calculate the swap. This _swap function it is generic, meaning that can operate with both tokens.
+     * We specify the tokenIn as the token we want to trade/swap and the tokenOut as the token we want to receive
+     * in the exchange.
+     * @param _reserveTokenIn Represents the tokenIn reserves in the system. It is filled from its public function swap().
+     * @param _reserveTokenOut Represents the tokenOut reserves in the system. It is filled from its public function swap().
+     * @param _amountTokenIn Represents the tokenIn amount we want to swap. It is filled from its public function swap().
+     * @return reserveTokenIn_new Represents the new tokenIn reserves after the swap. The user adds tokenIn to swap.
+     * @return reserveTokenOut_new Represents the new tokenOut reserves after the swap. The user "takes" tokenOut when swaps.
+     * @return rec It is the tokenOut amount the user takes or receives after the swap. When the user swaps tokenIn amount
+     * it will receive tokenOut based on the x*y=k proportion.
+     */
     function _swap(uint256 _reserveTokenIn, uint256 _reserveTokenOut, uint256 _amountTokenIn)
         private
         pure
@@ -238,6 +286,14 @@ contract Pool {
 
     function _swapTokenAmounts(uint256 _t0Amount, uint256 _t1Amount) private {}
 
+    function _getTokenOut(address _tokenIn) private returns(address r_tokenOut) {
+        r_tokenOut = (_tokenIn == s_token0) ? s_token1 : s_token0;
+    }
+
+    function _getTokenReserves(address _token) private returns(uint256) {
+        return _token == s_token0 ? s_reserveToken0 : s_reserveToken1;
+    }
+
     /////////
     //Test//
     ///////
@@ -253,7 +309,7 @@ contract Pool {
     ////////////
     //Getters//
     //////////
-    function getK() public view returns(uint256) {
+    function getK() public view returns (uint256) {
         return s_reserveToken0 * s_reserveToken1;
     }
 

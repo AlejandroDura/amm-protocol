@@ -72,17 +72,20 @@ contract Handler is Test {
 
         uint256 otherTokenReserve = pool.getTokenReserves(_getTheOtherToken(token));
 
-       // if((otherTokenReserve / 2) < 10) return;
        if(otherTokenReserve < 500) return;
 
         uint256 amountToSwapAdjusted = bound(_amountToSwap, 100, otherTokenReserve / 2);
 
+        uint256 Kafter = pool.getK();
         vm.startPrank(user);
         ERC20Mock(token).mint(user, amountToSwapAdjusted);
         ERC20Mock(token).approve(address(pool), amountToSwapAdjusted);
 
         pool.swap(token, amountToSwapAdjusted);
         vm.stopPrank();
+        uint256 Kbefore = pool.getK();
+
+        assertGe(Kbefore, Kafter, "K breaks SWAP!");
     }
 
     function removeLiquidity(uint256 _userIndex, uint256 _liquidityToRetrieve) public {

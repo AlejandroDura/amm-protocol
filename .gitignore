@@ -16,3 +16,5 @@ docs/
 #test files
 test/fuzz/HandlerSwapRoundTrip.t.sol
 test/fuzz/InvariantSwapRoundTrip.t.sol
+
+functions.txt

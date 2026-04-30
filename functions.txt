@@ -148,3 +148,45 @@
         assertEq(pool.getUserLP(user), userLP - liquiditySanitized);
         assertEq(pool.getTotalLP(), totalLiquidity - liquiditySanitized);
     }
+
+        function invariant_CrossLPShare() public view {
+        uint256 totalLP = pool.getTotalLP();
+        (uint256 reserve0, uint256 reserve1) = pool.getReservePairs();
+
+        if (totalLP == 0 || reserve0 == 0) return;
+
+        for (uint256 i = 0; i < users.length; i++) {
+            address user = users[i];
+
+            uint256 userLP = pool.getUserLP(user);
+
+            if (userLP == 0) continue;
+           
+            (uint256 actual0,) = pool.getUserReservesToRemove(user);
+
+            // 🔥 Mejor comparar cross-multiplication (evita divisiones)
+            uint256 lhs = userLP * reserve0;
+            uint256 rhs = actual0 * totalLP;
+            console.log("UserLP", userLP);
+            assertApproxEqRel(lhs, rhs, 1e12, "LP Share token0 Breaks!!");
+            //assertEq(lhs, rhs, "LP Share token0 Breaks!!");
+        }
+    }
+
+        function invariant_conservationOfToken0() public view {
+        uint256 total = ERC20Mock(token0).totalSupply();
+
+        uint256 poolBalance = ERC20Mock(token0).balanceOf(address(pool));
+
+        uint256 userSum = 0;
+        for (uint256 i = 0; i < users.length; i++) {
+            userSum += ERC20Mock(token0).balanceOf(users[i]);
+        }
+
+        console.log("TOTAL:", total);
+        console.log("POOL:", poolBalance);
+        console.log("USERS:", userSum);
+        console.log("DIFF:", total - (poolBalance + userSum));
+
+        assertEq(total, poolBalance + userSum, "CONSERVATION OF TOKENS FAILED");
+    }
