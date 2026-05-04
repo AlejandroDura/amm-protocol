@@ -28,6 +28,13 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import "forge-std/console.sol";
 
+interface ILPToken {
+    function mint(address account, uint256 amount) external;
+    function burn(address account, uint256 amount) external;
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+}
+
 contract Pool {
     ///////////
     //Errors//
@@ -52,27 +59,23 @@ contract Pool {
     address s_token0;
     address s_token1;
 
+    //LP Token
+    address s_lpToken;
+
     //Reserves of token pairs.
     uint256 s_reserveToken0;
     uint256 s_reserveToken1;
-
-    //This variable stores the pool proportion for each user in the system.
-    mapping(address => uint256) s_userLPSupply;
-
-    //This token measures the total amount of LP tokens. It represents the total proportion of the pool among all users.
-    uint256 s_LP_totalSupply;
-
-    address[] public usersParticipated;
 
     uint256 public constant PRICE_PRECISION_SCALE = 1e10;
     uint256 public constant FEE_BPS = 300;
     uint256 private constant BPS_PRECISION = 10_000;
 
-    constructor(address t0, address t1) {
-        s_token0 = t0;
-        s_token1 = t1;
+    constructor(address _t0, address _t1, address _lp) {
+        s_token0 = _t0;
+        s_token1 = _t1;
         s_reserveToken0 = 0;
         s_reserveToken1 = 0;
+        s_lpToken = _lp;
 
         console.log("POOL ADDRESS INSIDE:", address(this));
     }
@@ -106,9 +109,6 @@ contract Pool {
             revert Pool__TokenTransferFailed(s_token1);
         }
 
-        console.log("POOL msg.sender:", msg.sender);
-        // console.log("msg.sender in pool:", msg.sender);
-        //console.log("LP balance of msg.sender", getUserLP(msg.sender));
         emit LiquidityAdded(msg.sender, t0AmountUsed, t1AmountUsed);
     }
 
@@ -123,19 +123,20 @@ contract Pool {
             revert Pool__LiquidityToRetrieveMustBeGreaterThanZero();
         }
 
-        if (s_LP_totalSupply == 0) {
+        uint256 totalLP = ILPToken(s_lpToken).totalSupply();
+        if (totalLP == 0) {
             revert Pool__ThereIsNotLiquidityInTheSystem();
         }
 
-        if (_liquidityToRetrieve > s_userLPSupply[msg.sender]) {
+        uint256 userLP = ILPToken(s_lpToken).balanceOf(msg.sender);
+        if (_liquidityToRetrieve > userLP) {
             revert Pool__ProvidedLiquidityExceedsUserLiquidity();
         }
 
-        uint256 reserve0Proportion = (_liquidityToRetrieve * s_reserveToken0) / s_LP_totalSupply;
-        uint256 reserve1Proportion = (_liquidityToRetrieve * s_reserveToken1) / s_LP_totalSupply;
+        uint256 reserve0Proportion = (_liquidityToRetrieve * s_reserveToken0) / totalLP;
+        uint256 reserve1Proportion = (_liquidityToRetrieve * s_reserveToken1) / totalLP;
 
-        s_userLPSupply[msg.sender] -= _liquidityToRetrieve;
-        s_LP_totalSupply -= _liquidityToRetrieve;
+        ILPToken(s_lpToken).burn(msg.sender, _liquidityToRetrieve); //Check call security
 
         s_reserveToken0 -= reserve0Proportion;
         s_reserveToken1 -= reserve1Proportion;
@@ -162,7 +163,8 @@ contract Pool {
         address token0 = s_token0;
         address token1 = s_token1;
 
-        if (s_LP_totalSupply == 0) {
+        uint256 totalLP = ILPToken(s_lpToken).totalSupply();
+        if (totalLP == 0) {
             revert Pool__ThereIsNotLiquidityInTheSystem();
         }
 
@@ -227,22 +229,21 @@ contract Pool {
      */
     function _mintLP(uint256 _t0Deposit, uint256 _t1Deposit) private returns (uint256 r_t0Used, uint256 r_t1Used) {
         uint256 lpToMint;
+        uint256 totalLP = ILPToken(s_lpToken).totalSupply();
 
-        if (s_LP_totalSupply == 0) {
+        if (totalLP == 0) {
             lpToMint = Math.sqrt(_t0Deposit * _t1Deposit);
             r_t0Used = _t0Deposit;
             r_t1Used = _t1Deposit;
         } else {
-            uint256 lp0 = (_t0Deposit * s_LP_totalSupply) / s_reserveToken0;
-            uint256 lp1 = (_t1Deposit * s_LP_totalSupply) / s_reserveToken1;
+            uint256 lp0 = (_t0Deposit * totalLP) / s_reserveToken0;
+            uint256 lp1 = (_t1Deposit * totalLP) / s_reserveToken1;
             lpToMint = Math.min(lp0, lp1);
-            r_t0Used = (lpToMint * s_reserveToken0) / s_LP_totalSupply;
-            r_t1Used = (lpToMint * s_reserveToken1) / s_LP_totalSupply;
+            r_t0Used = (lpToMint * s_reserveToken0) / totalLP;
+            r_t1Used = (lpToMint * s_reserveToken1) / totalLP;
         }
 
-        s_LP_totalSupply += lpToMint;
-        s_userLPSupply[msg.sender] += lpToMint;
-        usersParticipated.push(msg.sender);
+        ILPToken(s_lpToken).mint(msg.sender, lpToMint);
     }
 
     /**
@@ -265,11 +266,6 @@ contract Pool {
     {
         // t0 * t1 = k --> t1 = k/t0
         //tokenOut = k / tokenIn;
-        // uint256 amountInWithFee = _amountTokenIn * (PERCENTAGE_PRECISION - FEE) / PERCENTAGE_PRECISION;
-        // reserveTokenIn_new = _reserveTokenIn + _amountTokenIn;
-        // reserveTokenOut_new = (_reserveTokenIn * _reserveTokenOut) / (_reserveTokenIn + amountInWithFee);
-
-        // rec = _reserveTokenOut - reserveTokenOut_new;
 
         uint256 amountInAfterFee = _amountTokenIn * (BPS_PRECISION - FEE_BPS) / BPS_PRECISION;
         rec = (_reserveTokenOut * amountInAfterFee) / (_reserveTokenIn + amountInAfterFee);
@@ -282,16 +278,6 @@ contract Pool {
 
         reserveTokenIn_new = _reserveTokenIn + _amountTokenIn;
         reserveTokenOut_new = _reserveTokenOut - rec;
-    }
-
-    function _swapTokenAmounts(uint256 _t0Amount, uint256 _t1Amount) private {}
-
-    function _getTokenOut(address _tokenIn) private returns(address r_tokenOut) {
-        r_tokenOut = (_tokenIn == s_token0) ? s_token1 : s_token0;
-    }
-
-    function _getTokenReserves(address _token) private returns(uint256) {
-        return _token == s_token0 ? s_reserveToken0 : s_reserveToken1;
     }
 
     /////////
@@ -328,30 +314,24 @@ contract Pool {
         return (s_token0, s_token1);
     }
 
+    function getLPToken() external view returns (address) {
+        return s_lpToken;
+    }
+
     function getReservePairs() external view returns (uint256, uint256) {
         return (s_reserveToken0, s_reserveToken1);
     }
 
     function getTotalLP() public view returns (uint256) {
-        return s_LP_totalSupply;
+        return ILPToken(s_lpToken).totalSupply();
     }
 
     function getUserLP() public view returns (uint256) {
-        return s_userLPSupply[msg.sender];
+        return ILPToken(s_lpToken).balanceOf(msg.sender);
     }
 
     function getUserLP(address user) public view returns (uint256) {
-        return s_userLPSupply[user];
-    }
-
-    function getTheTokenUserLP(address _user) public view returns (uint256) {
-        return s_LP_totalSupply;
-    }
-
-    function getUserReservesToRemove(address user) public view returns (uint256 token0Amount, uint256 token1Amount) {
-        uint256 userLP = getUserLP(user);
-        token0Amount = (userLP * s_reserveToken0) / s_LP_totalSupply;
-        token1Amount = (userLP * s_reserveToken1) / s_LP_totalSupply;
+        return ILPToken(s_lpToken).balanceOf(user);
     }
 
     function getTokenReserves(address _token) public view returns (uint256) {
@@ -364,21 +344,5 @@ contract Pool {
         }
 
         return s_reserveToken1;
-    }
-
-    function getUsersParticipated() public view {
-        //address[] memory users = usersParticipated;
-        for (uint256 i = 0; i < usersParticipated.length; i++) {
-            console.log("Usuarios participantes dentro del pool: ", usersParticipated[i]);
-        }
-    }
-
-    function getUsersParticipatedTotalLP() public view returns (uint256) {
-        //address[] memory users = usersParticipated;
-        uint256 sum;
-        for (uint256 i = 0; i < usersParticipated.length; i++) {
-            sum += s_userLPSupply[usersParticipated[i]];
-        }
-        return sum;
     }
 }

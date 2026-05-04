@@ -21,8 +21,6 @@ contract Handler is Test {
     address token1;
 
     mapping(address => uint256) public usersLP;
-    uint256 public totalLP;
-    uint256 public userLP;
 
     address[] public users;
     address[] public usersWithLiquidity;
@@ -66,9 +64,6 @@ contract Handler is Test {
 
         address user = users[_userIndex % users.length];
         address token = _getTokenFromSeed(_tokenSeed);
-
-        uint256 min = pool.getTokenReserves(token) / 1e6;
-        uint256 max = pool.getTokenReserves(token) / 10;
 
         uint256 otherTokenReserve = pool.getTokenReserves(_getTheOtherToken(token));
 

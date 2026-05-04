@@ -7,6 +7,7 @@ import {DeployPool} from "script/DeployPool.s.sol";
 import {Pool} from "src/Pool.sol";
 import {HelperConfig} from "script/HelperConfig.s.sol";
 import {ERC20Mock} from "src/mocks/ERC20Mock.sol";
+import {LPToken} from "src/tokens/LPToken.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract PoolTest is Test {
@@ -17,6 +18,8 @@ contract PoolTest is Test {
     address token0;
     address token1;
 
+    address lpToken;
+
     address USER = makeAddr("user");
     uint256 TOKEN_INITIAL_AMOUNT = 10000 ether;
 
@@ -24,7 +27,7 @@ contract PoolTest is Test {
         deployer = new DeployPool();
         (pool, config) = deployer.run();
 
-        (token0, token1,) = config.activeNetworkConfig();
+        (token0, token1, lpToken,) = config.activeNetworkConfig();
 
         ERC20Mock(token0).mint(USER, TOKEN_INITIAL_AMOUNT);
         ERC20Mock(token1).mint(USER, TOKEN_INITIAL_AMOUNT);
@@ -34,12 +37,14 @@ contract PoolTest is Test {
     //Constructor//
     //////////////
 
-    function testConstructorInit() public {
+    function testConstructorInit() public view {
         (address t0, address t1) = pool.getTokenPairs();
         (uint256 r0, uint256 r1) = pool.getReservePairs();
+        address _lpToken = pool.getLPToken();
 
         assertEq(t0, token0);
         assertEq(t1, token1);
+        assertEq(_lpToken, lpToken);
         assertEq(r0, 0);
         assertEq(r1, 0);
     }
@@ -397,14 +402,14 @@ contract PoolTest is Test {
     //Maths//
     ////////
 
-    function testPairsDecimals() public {
+    function testPairsDecimals() public view {
         (uint8 decimal0, uint8 decimal1) = pool.getPairsDecimals();
 
         assertEq(decimal0, 18);
         assertEq(decimal1, 6);
     }
 
-    function testPairsDecimalScale() public {
+    function testPairsDecimalScale() public view {
         (uint256 scale0, uint256 scale1) = pool.getPairsDecimalScale();
 
         uint256 expectedScale0 = 1;

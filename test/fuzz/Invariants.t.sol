@@ -21,6 +21,7 @@ contract Invariants is StdInvariant, Test {
 
     address token0;
     address token1;
+    address lpToken;
 
     function setUp() external {
         for (uint256 i = 0; i < 10; i++) {
@@ -31,7 +32,7 @@ contract Invariants is StdInvariant, Test {
         (pool, config) = deployer.run();
         handler = new Handler(pool, users);
 
-        (token0, token1,) = config.activeNetworkConfig();
+        (token0, token1, lpToken,) = config.activeNetworkConfig();
 
         targetContract(address(handler));
 
@@ -76,7 +77,7 @@ contract Invariants is StdInvariant, Test {
         assertEq(sum, pool.getTotalLP(), "LP Conservation failed");
     }
 
-    function invariant_CanNotClaimMoreThanPool() public { //OK
+    function invariant_CanNotClaimMoreThanPool() public view { //OK
         uint256 totalLP = pool.getTotalLP();
         if(totalLP == 0) return;
 

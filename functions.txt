@@ -190,3 +190,15 @@
 
         assertEq(total, poolBalance + userSum, "CONSERVATION OF TOKENS FAILED");
     }
+
+
+        swap:
+        // t0 * t1 = k --> t1 = k/t0
+        //tokenOut = k / tokenIn;
+        // uint256 amountInWithFee = _amountTokenIn * (PERCENTAGE_PRECISION - FEE) / PERCENTAGE_PRECISION;
+        // reserveTokenIn_new = _reserveTokenIn + _amountTokenIn;
+        // reserveTokenOut_new = (_reserveTokenIn * _reserveTokenOut) / (_reserveTokenIn + amountInWithFee);
+
+        // rec = _reserveTokenOut - reserveTokenOut_new;
+
+    
