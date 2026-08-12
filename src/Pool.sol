@@ -26,6 +26,7 @@ pragma solidity ^0.8.19;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "forge-std/console.sol";
 
 interface ILPToken {
@@ -35,7 +36,7 @@ interface ILPToken {
     function balanceOf(address account) external view returns (uint256);
 }
 
-contract Pool {
+contract Pool is ReentrancyGuard {
     ///////////
     //Errors//
     /////////
@@ -49,11 +50,14 @@ contract Pool {
     error Pool__ProvidedTokenDoesNotExists();
     error Pool__SwapAmountTooSmall();
     error Pool__LiquidityToRemoveTooSmall();
+    error Pool__SlippageDetection();
 
     ///////////
     //Events//
     /////////
     event LiquidityAdded(address indexed user, uint256 indexed amount0, uint256 indexed amount1);
+    event LiquidityRemoved(address indexed user, uint256 indexed amountLp);
+    event Swap(address indexed user, address indexed token, uint256 indexed amount);
 
     //Token pair addresses
     address s_token0;
@@ -76,8 +80,6 @@ contract Pool {
         s_reserveToken0 = 0;
         s_reserveToken1 = 0;
         s_lpToken = _lp;
-
-        console.log("POOL ADDRESS INSIDE:", address(this));
     }
 
     /////////////
@@ -89,15 +91,17 @@ contract Pool {
      * @param _t0Deposit deposit amount for token0.
      * @param _t1Deposit deposit amount for token1.
      */
-    function addLiquidity(uint256 _t0Deposit, uint256 _t1Deposit) external {
+    function addLiquidity(uint256 _t0Deposit, uint256 _t1Deposit) external nonReentrant {
         if (_t0Deposit == 0 || _t1Deposit == 0) {
             revert Pool__NewDepositsMustBeGreaterThanZero(_t0Deposit, _t1Deposit);
         }
 
-        (uint256 t0AmountUsed, uint256 t1AmountUsed) = _mintLP(_t0Deposit, _t1Deposit);
+        (uint256 t0AmountUsed, uint256 t1AmountUsed, uint256 lpToMint) = _mintLP(_t0Deposit, _t1Deposit);
 
         s_reserveToken0 += t0AmountUsed;
         s_reserveToken1 += t1AmountUsed;
+
+        ILPToken(s_lpToken).mint(msg.sender, lpToMint);
 
         bool success = IERC20(s_token0).transferFrom(msg.sender, address(this), t0AmountUsed);
         if (!success) {
@@ -118,7 +122,7 @@ contract Pool {
      * fees.
      * @param _liquidityToRetrieve Amount of LP user token. This LP token represents the user`s pool percentaje.
      */
-    function removeLiquidity(uint256 _liquidityToRetrieve) external {
+    function removeLiquidity(uint256 _liquidityToRetrieve) external nonReentrant {
         if (_liquidityToRetrieve == 0) {
             revert Pool__LiquidityToRetrieveMustBeGreaterThanZero();
         }
@@ -136,10 +140,10 @@ contract Pool {
         uint256 reserve0Proportion = (_liquidityToRetrieve * s_reserveToken0) / totalLP;
         uint256 reserve1Proportion = (_liquidityToRetrieve * s_reserveToken1) / totalLP;
 
-        ILPToken(s_lpToken).burn(msg.sender, _liquidityToRetrieve); //Check call security
-
         s_reserveToken0 -= reserve0Proportion;
         s_reserveToken1 -= reserve1Proportion;
+
+        ILPToken(s_lpToken).burn(msg.sender, _liquidityToRetrieve);
 
         bool success = IERC20(s_token0).transfer(msg.sender, reserve0Proportion);
         if (!success) {
@@ -150,6 +154,8 @@ contract Pool {
         if (!success) {
             revert Pool__TokenTransferFailed(s_token1);
         }
+
+        emit LiquidityRemoved(msg.sender, _liquidityToRetrieve);
     }
 
     /**
@@ -158,8 +164,11 @@ contract Pool {
      * token.
      * @param _tokenIn token to swap.
      * @param _amountTokenIn The amount of tokenIn you want to swap.
+     * @param _amountTokenOutMin This variable sets the min token amount that must be transfered to the user in the
+     * swap. It is a variable to prevent slippage. It is just necessary to check wheter a slippage occurred or not.
+     * The value of this variable is calculated and provided by the fronted.
      */
-    function swap(address _tokenIn, uint256 _amountTokenIn) external {
+    function swap(address _tokenIn, uint256 _amountTokenIn, uint256 _amountTokenOutMin) external nonReentrant {
         address token0 = s_token0;
         address token1 = s_token1;
 
@@ -179,15 +188,33 @@ contract Pool {
         address tokenIn;
         address tokenOut;
         uint256 userRecv;
+        uint256 reserveTokenIn;
+        uint256 reserveTokenOut;
 
         if (_tokenIn == token0) {
             tokenIn = token0;
             tokenOut = token1;
-            (s_reserveToken0, s_reserveToken1, userRecv) = _swap(s_reserveToken0, s_reserveToken1, _amountTokenIn);
+            reserveTokenIn = s_reserveToken0;
+            reserveTokenOut = s_reserveToken1;
         } else {
             tokenIn = token1;
             tokenOut = token0;
-            (s_reserveToken1, s_reserveToken0, userRecv) = _swap(s_reserveToken1, s_reserveToken0, _amountTokenIn);
+            reserveTokenIn = s_reserveToken1;
+            reserveTokenOut = s_reserveToken0;
+        }
+
+        if (_getAmountOut(reserveTokenIn, reserveTokenOut, _amountTokenIn) < _amountTokenOutMin) {
+            revert Pool__SlippageDetection();
+        }
+
+        (reserveTokenIn, reserveTokenOut, userRecv) = _swap(reserveTokenIn, reserveTokenOut, _amountTokenIn);
+
+        if (_tokenIn == token0) {
+            s_reserveToken0 = reserveTokenIn;
+            s_reserveToken1 = reserveTokenOut;
+        } else {
+            s_reserveToken1 = reserveTokenIn;
+            s_reserveToken0 = reserveTokenOut;
         }
 
         bool success = IERC20(tokenIn).transferFrom(msg.sender, address(this), _amountTokenIn);
@@ -199,6 +226,8 @@ contract Pool {
         if (!success) {
             revert Pool__TokenTransferFailed(tokenOut);
         }
+
+        emit Swap(msg.sender, tokenIn, _amountTokenIn);
     }
 
     ////////////
@@ -215,6 +244,15 @@ contract Pool {
         return (scale0, scale1);
     }
 
+    function _getAmountOut(uint256 _reserveTokenIn, uint256 _reserveTokenOut, uint256 _amountTokenIn)
+        private
+        pure
+        returns (uint256)
+    {
+        uint256 amountInAfterFee = _amountTokenIn * (BPS_PRECISION - FEE_BPS) / BPS_PRECISION;
+        return (_reserveTokenOut * amountInAfterFee) / (_reserveTokenIn + amountInAfterFee);
+    }
+
     /**
      * @dev This is the mint LP token function used by the addLiquidity() function. It calculates the new
      * users' pool proportion based on the deposited amount and the current reserves amounts. The LP token is used to measure
@@ -227,23 +265,23 @@ contract Pool {
      * @return r_t0Used Token 0 deposit amount adjusted and used. It may be adjusted because of the minimum proportion picked.
      * @return r_t1Used Token 1 deposit amount adjusted and used. It may be adjusted because of the minimum proportion picked.
      */
-    function _mintLP(uint256 _t0Deposit, uint256 _t1Deposit) private returns (uint256 r_t0Used, uint256 r_t1Used) {
-        uint256 lpToMint;
+    function _mintLP(uint256 _t0Deposit, uint256 _t1Deposit)
+        private
+        returns (uint256 r_t0Used, uint256 r_t1Used, uint256 r_lpToMint)
+    {
         uint256 totalLP = ILPToken(s_lpToken).totalSupply();
 
         if (totalLP == 0) {
-            lpToMint = Math.sqrt(_t0Deposit * _t1Deposit);
+            r_lpToMint = Math.sqrt(_t0Deposit * _t1Deposit);
             r_t0Used = _t0Deposit;
             r_t1Used = _t1Deposit;
         } else {
             uint256 lp0 = (_t0Deposit * totalLP) / s_reserveToken0;
             uint256 lp1 = (_t1Deposit * totalLP) / s_reserveToken1;
-            lpToMint = Math.min(lp0, lp1);
-            r_t0Used = (lpToMint * s_reserveToken0) / totalLP;
-            r_t1Used = (lpToMint * s_reserveToken1) / totalLP;
+            r_lpToMint = Math.min(lp0, lp1);
+            r_t0Used = (r_lpToMint * s_reserveToken0) / totalLP;
+            r_t1Used = (r_lpToMint * s_reserveToken1) / totalLP;
         }
-
-        ILPToken(s_lpToken).mint(msg.sender, lpToMint);
     }
 
     /**
@@ -264,11 +302,7 @@ contract Pool {
         pure
         returns (uint256 reserveTokenIn_new, uint256 reserveTokenOut_new, uint256 rec)
     {
-        // t0 * t1 = k --> t1 = k/t0
-        //tokenOut = k / tokenIn;
-
-        uint256 amountInAfterFee = _amountTokenIn * (BPS_PRECISION - FEE_BPS) / BPS_PRECISION;
-        rec = (_reserveTokenOut * amountInAfterFee) / (_reserveTokenIn + amountInAfterFee);
+        rec = _getAmountOut(_reserveTokenIn, _reserveTokenOut, _amountTokenIn);
 
         if (rec == 0) {
             revert Pool__SwapAmountTooSmall();
@@ -283,7 +317,7 @@ contract Pool {
     /////////
     //Test//
     ///////
-    function mintLP(uint256 _t0Deposit, uint256 _t1Deposit) public returns (uint256, uint256) {
+    function mintLP(uint256 _t0Deposit, uint256 _t1Deposit) public returns (uint256, uint256, uint256) {
         return _mintLP(_t0Deposit, _t1Deposit);
     }
 
@@ -295,6 +329,21 @@ contract Pool {
     ////////////
     //Getters//
     //////////
+    function getTokenOutAmount(address _tokenIn, uint256 _amountTokenIn) public view returns (uint256 amountTokenOut) {
+        address token0 = s_token0;
+        address token1 = s_token1;
+
+        if (_tokenIn != token0 && _tokenIn != token1) {
+            revert Pool__ProvidedTokenDoesNotExists();
+        }
+
+        if (_tokenIn == token0) {
+            amountTokenOut = _getAmountOut(s_reserveToken0, s_reserveToken1, _amountTokenIn);
+        } else {
+            amountTokenOut = _getAmountOut(s_reserveToken1, s_reserveToken0, _amountTokenIn);
+        }
+    }
+
     function getK() public view returns (uint256) {
         return s_reserveToken0 * s_reserveToken1;
     }
@@ -320,6 +369,10 @@ contract Pool {
 
     function getReservePairs() external view returns (uint256, uint256) {
         return (s_reserveToken0, s_reserveToken1);
+    }
+
+    function getTokenReserve(address _token) external view returns (uint256) {
+        return _token == s_token0 ? s_reserveToken0 : s_reserveToken1;
     }
 
     function getTotalLP() public view returns (uint256) {

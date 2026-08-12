@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 
 import {Script, console} from "forge-std/Script.sol";
 import {Pool} from "src/Pool.sol";
+import {LPToken} from "src/tokens/LPToken.sol";
 import {HelperConfig} from "script/HelperConfig.s.sol";
 
 contract DeployPool is Script {
@@ -14,6 +15,8 @@ contract DeployPool is Script {
 
         vm.startBroadcast(deployerKey);
         Pool pool = new Pool(t0, t1, lpToken);
+        LPToken(lpToken).grantMintRole(address(pool));
+        LPToken(lpToken).lockRoles();
         vm.stopBroadcast();
 
         return (pool, config);

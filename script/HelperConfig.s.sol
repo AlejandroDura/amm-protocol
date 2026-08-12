@@ -34,17 +34,22 @@ contract HelperConfig is Script {
             return activeNetworkConfig;
         }
 
-        vm.startBroadcast();
+        vm.startBroadcast(DEFAULT_ANVIL_KEY);
         ERC20Mock ethMock = new ERC20Mock("wETH", "wETH", ETH_DECIMALS, msg.sender, 1_000_000 * 1e18);
         ERC20Mock usdcMock = new ERC20Mock("USDC", "USDC", USDC_DECIMALS, msg.sender, 1_000_000 * 1e6);
         LPToken _lpToken = new LPToken();
         vm.stopBroadcast();
 
-        return NetworkConfig({token0: address(ethMock), token1: address(usdcMock), lpToken: address(_lpToken), deployerKey: DEFAULT_ANVIL_KEY});
+        return NetworkConfig({
+            token0: address(ethMock),
+            token1: address(usdcMock),
+            lpToken: address(_lpToken),
+            deployerKey: DEFAULT_ANVIL_KEY
+        });
     }
 
     function getSepoliaConfig() public returns (NetworkConfig memory) {
-        vm.startBroadcast();
+        vm.startBroadcast(vm.envUint("SEPOLIA_PRIVATE_KEY"));
         LPToken _lpToken = new LPToken();
         vm.stopBroadcast();
 

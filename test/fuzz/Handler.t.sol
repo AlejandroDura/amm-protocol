@@ -29,6 +29,9 @@ contract Handler is Test {
 
     uint256 public timesAddLiquidityCalled;
 
+    uint256 BPS_PRECISION = 10_000;
+    uint256 SLIPPAGE_BPS = 100;
+
     constructor(Pool _pool, address[] memory u) {
         pool = _pool;
         (token0, token1) = pool.getTokenPairs();
@@ -67,16 +70,17 @@ contract Handler is Test {
 
         uint256 otherTokenReserve = pool.getTokenReserves(_getTheOtherToken(token));
 
-       if(otherTokenReserve < 500) return;
+        if (otherTokenReserve < 500) return;
 
         uint256 amountToSwapAdjusted = bound(_amountToSwap, 100, otherTokenReserve / 2);
+        uint256 minTokenOutToReceive =
+            (pool.getTokenOutAmount(token, amountToSwapAdjusted) * (BPS_PRECISION - SLIPPAGE_BPS)) / BPS_PRECISION;
 
         uint256 Kafter = pool.getK();
         vm.startPrank(user);
         ERC20Mock(token).mint(user, amountToSwapAdjusted);
         ERC20Mock(token).approve(address(pool), amountToSwapAdjusted);
-
-        pool.swap(token, amountToSwapAdjusted);
+        pool.swap(token, amountToSwapAdjusted, minTokenOutToReceive);
         vm.stopPrank();
         uint256 Kbefore = pool.getK();
 

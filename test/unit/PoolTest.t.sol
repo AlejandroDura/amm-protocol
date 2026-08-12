@@ -23,6 +23,9 @@ contract PoolTest is Test {
     address USER = makeAddr("user");
     uint256 TOKEN_INITIAL_AMOUNT = 10000 ether;
 
+    uint256 BPS_PRECISION = 10_000;
+    uint256 SLIPPAGE_BPS = 100;
+
     function setUp() public {
         deployer = new DeployPool();
         (pool, config) = deployer.run();
@@ -158,7 +161,9 @@ contract PoolTest is Test {
         uint256 expectedUserLP = Math.sqrt(t0Deposit * t1Deposit);
         uint256 expectedTotalLP = expectedUserLP;
         vm.startPrank(USER);
-        pool.mintLP(t0Deposit, t1Deposit);
+        ERC20Mock(token0).approve(address(pool), t0Deposit);
+        ERC20Mock(token1).approve(address(pool), t1Deposit);
+        pool.addLiquidity(t0Deposit, t1Deposit);
         uint256 totalLP = pool.getTotalLP();
         uint256 userLP = pool.getUserLP();
         vm.stopPrank();
@@ -180,10 +185,10 @@ contract PoolTest is Test {
         uint256 expectedTotalLP = expectedUserLP;
 
         vm.startPrank(USER);
-        pool.mintLP(t0Deposit, t1Deposit);
+        ERC20Mock(token0).approve(address(pool), t0Deposit);
+        ERC20Mock(token1).approve(address(pool), t1Deposit);
+        pool.addLiquidity(t0Deposit, t1Deposit);
         vm.stopPrank();
-
-        pool.setFakeReserves(t0Deposit, t1Deposit);
 
         //SECOND DEPOSIT
         t0Deposit = 4000e18;
@@ -195,12 +200,15 @@ contract PoolTest is Test {
 
         uint256 expectedT0Used = (lpMint * reserve0) / expectedTotalLP;
         uint256 expectedT1Used = (lpMint * reserve1) / expectedTotalLP;
+        (uint256 t0Used, uint256 t1Used,) = pool.mintLP(t0Deposit, t1Deposit);
 
         expectedTotalLP += lpMint;
         expectedUserLP += lpMint;
 
         vm.startPrank(USER);
-        (uint256 t0Used, uint256 t1Used) = pool.mintLP(t0Deposit, t1Deposit);
+        ERC20Mock(token0).approve(address(pool), t0Deposit);
+        ERC20Mock(token1).approve(address(pool), t1Deposit);
+        pool.addLiquidity(t0Deposit, t1Deposit);
         uint256 currentTotalLP = pool.getTotalLP();
         uint256 currentUserLP = pool.getUserLP();
         vm.stopPrank();
@@ -309,21 +317,31 @@ contract PoolTest is Test {
     function testSwapWhenTotalSupplyIsZero() public {
         vm.startPrank(USER);
         vm.expectRevert(Pool.Pool__ThereIsNotLiquidityInTheSystem.selector);
-        pool.swap(token0, 100e18);
+        pool.swap(token0, 100e18, 0);
         vm.stopPrank();
     }
 
     function testSwapZeroAmount() public addLiquidity(100e18, 100e6) {
         vm.startPrank(USER);
         vm.expectRevert(Pool.Pool__TokenAmountMustBeGreaterThanZero.selector);
-        pool.swap(token1, 0);
+        pool.swap(token1, 0, 0);
         vm.stopPrank();
     }
 
     function testSwapTokenThatDoesNotExists() public addLiquidity(100e18, 100e6) {
         vm.startPrank(USER);
         vm.expectRevert(Pool.Pool__ProvidedTokenDoesNotExists.selector);
-        pool.swap(address(12345), 100e18);
+        pool.swap(address(12345), 100e18, 0);
+        vm.stopPrank();
+    }
+
+    function testSwapSlippageDetection() public addLiquidity(2000e18, 1000e6) {
+        uint256 amountIn = 1000e18;
+        uint256 expectedTokenOut = pool.getTokenOutAmount(address(token0), amountIn);
+        vm.startPrank(USER);
+        ERC20Mock(token0).approve(address(pool), amountIn);
+        vm.expectRevert(Pool.Pool__SlippageDetection.selector);
+        pool.swap(address(token0), amountIn, 5000e18);
         vm.stopPrank();
     }
 
@@ -345,7 +363,9 @@ contract PoolTest is Test {
 
         vm.startPrank(USER);
         ERC20Mock(token0).approve(address(pool), t0_to_swap);
-        pool.swap(token0, t0_to_swap);
+        uint256 t0_to_swap_min =
+            (pool.getTokenOutAmount(token0, t0_to_swap) * (BPS_PRECISION - SLIPPAGE_BPS)) / BPS_PRECISION;
+        pool.swap(token0, t0_to_swap, t0_to_swap_min);
         vm.stopPrank();
 
         uint256 currentPoolToken0Balance = ERC20Mock(token0).balanceOf(address(pool));
@@ -383,7 +403,9 @@ contract PoolTest is Test {
 
         vm.startPrank(USER);
         ERC20Mock(token1).approve(address(pool), t1_to_swap);
-        pool.swap(token1, t1_to_swap);
+        uint256 t1_to_swap_min =
+            (pool.getTokenOutAmount(token1, t1_to_swap) * (BPS_PRECISION - SLIPPAGE_BPS)) / BPS_PRECISION;
+        pool.swap(token1, t1_to_swap, t1_to_swap_min);
         vm.stopPrank();
 
         uint256 currentPoolToken0Balance = ERC20Mock(token0).balanceOf(address(pool));
@@ -396,6 +418,54 @@ contract PoolTest is Test {
         assertEq(currentPoolToken1Balance, prevPoolToken1Balance + t1_to_swap, "TOKEN1");
         assertEq(currentPoolToken0Balance, prevPoolToken0Balance - expected_rec, "TOKEN1");
         assertGt(currentReserve0 * currentReserve1, k);
+    }
+
+    function test_swapManually_T0forT1() public addLiquidity(5000e18, 1200e6) {
+        /**
+         * We want to swap 100 ether. With a 3% fee aplied, we expect an effective
+         * 100 ether * (100% - 3%) = 100 ether * 97% = 97 ether
+         * The expected USDC received is: tokenIn * tokenOut = k
+         * 5000 * 1200 = 6,000,000 = k
+         * USDCreserves = 6,000,000 / 5097 = 1,177.1630370806356680400235432607
+         * USDCout = 1200 usdc - 1,177.1630370806356680400235432607
+         * USDCout = 22.8369629193643319599764567393 usdc = 22_836962 wei
+         */
+
+        uint256 expectedOut = 22_836962;
+        uint256 prevUsdcBalance = ERC20Mock(token1).balanceOf(USER);
+        uint256 amountTokenOutMin =
+            (pool.getTokenOutAmount(token0, 100e18) * (BPS_PRECISION - SLIPPAGE_BPS)) / BPS_PRECISION;
+
+        vm.startPrank(USER);
+        ERC20Mock(token0).approve(address(pool), 100e18);
+        pool.swap(token0, 100e18, amountTokenOutMin);
+        vm.stopPrank();
+
+        assertEq(ERC20Mock(token1).balanceOf(USER), prevUsdcBalance + expectedOut);
+    }
+
+    function test_swapManually_T1forT0() public addLiquidity(3000e18, 5000e6) {
+        /**
+         * We want to swap 1000 usdc. With a 3% fee aplied, we expect an effective
+         * 1000 usdc * (100% - 3%) = 1000 usdc * 97% = 970 usdc
+         * The expected USDC received is: tokenIn * tokenOut = k
+         * 3000 * 5000 = 15,000,000 = k
+         * WETHreserves = 15,000,000 / 5970 = 2,512.5628140703517587939698492462
+         * WETHout = 3000 weth - 2,512.5628140703517587939698492462 weth
+         * WETHout = 487.4371859296482412060301507538 weth =  487_437185929648241206 wei
+         */
+
+        uint256 expectedOut = 487_437185929648241206;
+        uint256 prevWethBalance = ERC20Mock(token0).balanceOf(USER);
+        uint256 amountTokenOutMin =
+            (pool.getTokenOutAmount(token1, 1000e6) * (BPS_PRECISION - SLIPPAGE_BPS)) / BPS_PRECISION;
+
+        vm.startPrank(USER);
+        ERC20Mock(token1).approve(address(pool), 1000e6);
+        pool.swap(token1, 1000e6, amountTokenOutMin);
+        vm.stopPrank();
+
+        assertEq(ERC20Mock(token0).balanceOf(USER), prevWethBalance + expectedOut);
     }
 
     //////////
@@ -419,3 +489,4 @@ contract PoolTest is Test {
         assertEq(scale1, expectedScale1);
     }
 }
+
